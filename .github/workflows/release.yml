@@ -1,0 +1,40 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '9.0.x'
+        include-prerelease: true
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Publish
+      run: dotnet publish -c Release -o publish
+
+    - name: Zip Release
+      run: Compress-Archive -Path publish/* -DestinationPath appcontainer-win-x64.zip
+      
+    - name: Create Release
+      uses: ncipollo/release-action@v1
+      with:
+        artifacts: "appcontainer-win-x64.zip"
+        token: ${{ secrets.GITHUB_TOKEN }}
+        generateReleaseNotes: true
