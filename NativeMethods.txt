@@ -35,3 +35,6 @@ GetSystemMetrics
 DefWindowProcW
 CW_USEDEFAULT
 GetWindowTextLength
+MonitorFromWindow
+GetMonitorInfo
+GetDesktopWindow

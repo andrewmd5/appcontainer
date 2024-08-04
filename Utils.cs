@@ -133,6 +133,30 @@ public static partial class Utils
         return bmp;
     }
 
+    /// <summary>
+    /// Retrieves the monitor information for the specified window handle.
+    /// </summary>
+    /// <param name="windowHandle">The handle of the window. If null, the desktop window handle is used.</param>
+    /// <returns>A Monitor object containing the position and dimensions of the monitor.</returns>
+    /// <exception cref="Exception">Thrown when unable to determine the monitor information.</exception>
+    internal static Monitor GetMonitorFromWindow(HWND windowHandle)
+    {
+        if (windowHandle.IsNull)
+        {
+            windowHandle = PInvoke.GetDesktopWindow();
+        }
+        var hMonitor = PInvoke.MonitorFromWindow(windowHandle, Windows.Win32.Graphics.Gdi.MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONEAREST);
+        Windows.Win32.Graphics.Gdi.MONITORINFO monitorInfo = new()
+        {
+            cbSize = (uint)Marshal.SizeOf<Windows.Win32.Graphics.Gdi.MONITORINFO>()
+        };
+        if (!PInvoke.GetMonitorInfo(hMonitor, ref monitorInfo))
+        {
+            throw new Exception("Unable to determine info for monitor");
+        }
+        return new Monitor(monitorInfo.rcMonitor.X, monitorInfo.rcMonitor.Y, monitorInfo.rcMonitor.Width, monitorInfo.rcMonitor.Height);
+    }
+
     [System.Text.RegularExpressions.GeneratedRegex("^#([0-9A-Fa-f]{6})$")]
     private static partial System.Text.RegularExpressions.Regex HexRegex();
 }

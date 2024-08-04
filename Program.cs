@@ -36,6 +36,26 @@ namespace AppContainer
 
                 Log("Application started");
 
+                if (arguments.TryGetValue("window-title", out var appWindowTitle))
+                {
+
+                    appWindow = PInvoke.FindWindow(null, appWindowTitle);
+                    if (appWindow == IntPtr.Zero)
+                    {
+                        throw new InvalidOperationException($"Could not find a window with the title: '{appWindowTitle}'. Please ensure the app window is open and the title is correct.");
+                    }
+                }
+                else if (arguments.TryGetValue("window-handle", out var windowHandle))
+                {
+                    appWindow = Utils.ConvertAndValidateWindowHandle(windowHandle);
+                }
+                else
+                {
+                    throw new ArgumentException("Neither 'window-title' nor 'window-handle' argument provided. Please specify either the app window title or handle.");
+                }
+
+                var monitor = Utils.GetMonitorFromWindow(appWindow);
+
                 // Load the background image or set the background color
                 if (arguments.TryGetValue("background-image", out string? backgroundImagePath))
                 {
@@ -54,8 +74,8 @@ namespace AppContainer
                     }
                     Color backgroundColor = ColorTranslator.FromHtml(backgroundColorHex);
                     backgroundImage = Utils.CreateSolidColorBitmap(backgroundColor,
-                        PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CXSCREEN),
-                        PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CYSCREEN));
+                    monitor.Width,
+                    monitor.Height);
                     Log($"Background color set: {backgroundColorHex}");
                 }
                 else if (arguments.TryGetValue("background-gradient", out string? gradientColors))
@@ -68,8 +88,8 @@ namespace AppContainer
                     Color color1 = ColorTranslator.FromHtml(colors[0]);
                     Color color2 = ColorTranslator.FromHtml(colors[1]);
                     backgroundImage = Utils.CreateGradientBitmap(color1, color2,
-                        PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CXSCREEN),
-                        PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CYSCREEN));
+                        monitor.Width,
+                        monitor.Height);
                     Log($"Background gradient set from {colors[0]} to {colors[1]}");
                 }
                 else
@@ -78,30 +98,14 @@ namespace AppContainer
                 }
 
                 // Create the host window
-                hostWindow = CreateHostWindow();
+                hostWindow = CreateHostWindow(monitor);
                 if (hostWindow == IntPtr.Zero)
                 {
                     throw new InvalidOperationException("Failed to create host window. Please check if you have sufficient permissions and system resources.");
                 }
                 Log("Host window created successfully");
 
-                if (arguments.TryGetValue("window-title", out var appWindowTitle))
-                {
 
-                    appWindow = PInvoke.FindWindow(null, appWindowTitle);
-                    if (appWindow == IntPtr.Zero)
-                    {
-                        throw new InvalidOperationException($"Could not find a window with the title: '{appWindowTitle}'. Please ensure the app window is open and the title is correct.");
-                    }
-                }
-                else if (arguments.TryGetValue("window-handle", out var windowHandle))
-                {
-                    appWindow = Utils.ConvertAndValidateWindowHandle(windowHandle);
-                }
-                else
-                {
-                    throw new ArgumentException("Neither 'window-title' nor 'window-handle' argument provided. Please specify either the app window title or handle.");
-                }
 
                 appProcess = GetProcessByWindow(appWindow);
                 if (appProcess == null)
@@ -177,7 +181,7 @@ namespace AppContainer
         /// </summary>
         /// <returns>A handle to the created window, or IntPtr.Zero if the creation fails.</returns>
         /// <exception cref="Exception">Thrown when window class registration or window creation fails.</exception>
-        private unsafe static HWND CreateHostWindow()
+        private unsafe static HWND CreateHostWindow(Monitor monitor)
         {
             HINSTANCE hInstance = new(Process.GetCurrentProcess().Handle);
             if (hInstance == IntPtr.Zero)
@@ -215,10 +219,10 @@ namespace AppContainer
                     pClassName,
                     pWindowName,
                     Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_VISIBLE,
-                    PInvoke.CW_USEDEFAULT,
-                    PInvoke.CW_USEDEFAULT,
-                    PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CXSCREEN),
-                    PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CYSCREEN),
+                    monitor.X,
+                    monitor.Y,
+                    monitor.Width,
+                    monitor.Height,
                     HWND.Null,
                     Windows.Win32.UI.WindowsAndMessaging.HMENU.Null,
                     hInstance,
@@ -295,6 +299,7 @@ namespace AppContainer
                     Log($"Warning: Failed to get app window rect. Error code: {Marshal.GetLastWin32Error()}");
                     return;
                 }
+
                 appWidth = appRect.right - appRect.left;
                 appHeight = appRect.bottom - appRect.top;
                 Log($"Using existing app window size: {appWidth}x{appHeight}");
@@ -479,9 +484,8 @@ namespace AppContainer
                         var hdc = PInvoke.BeginPaint(hWnd, out var ps);
                         using (Graphics g = Graphics.FromHdc(hdc))
                         {
-                            int screenWidth = PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CXSCREEN);
-                            int screenHeight = PInvoke.GetSystemMetrics(Windows.Win32.UI.WindowsAndMessaging.SYSTEM_METRICS_INDEX.SM_CYSCREEN);
-                            g.DrawImage(backgroundImage, 0, 0, screenWidth, screenHeight);
+                            var monitor = Utils.GetMonitorFromWindow(hWnd);
+                            g.DrawImage(backgroundImage, 0, 0, monitor.Width, monitor.Height);
                         }
                         PInvoke.EndPaint(hWnd, ps);
                     }
