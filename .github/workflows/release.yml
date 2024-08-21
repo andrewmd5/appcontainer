@@ -22,16 +22,22 @@ jobs:
 
     - name: Restore dependencies
       run: dotnet restore
+      env:
+        DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
     - name: Build
       run: dotnet build --configuration Release --no-restore
+      env:
+        DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
     - name: Publish
       run: dotnet publish -c Release -o publish
+      env:
+        DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
     - name: Zip Release
       run: Compress-Archive -Path publish/* -DestinationPath appcontainer-win-x64.zip
-      
+
     - name: Create Release
       uses: ncipollo/release-action@v1
       with:

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using Windows.Win32;
@@ -15,6 +16,8 @@ namespace AppContainer
         private static Process? appProcess;
         private static HWND hostWindow;
         private static Bitmap? backgroundImage;
+        private static Bitmap? overlayImage;
+        private static string? overlayPosition;
         private static HWND appWindow;
         private static int appWidth;
         private static int appHeight;
@@ -29,7 +32,7 @@ namespace AppContainer
             try
             {
                 var arguments = Utils.ParseArguments(args);
-#if DEBUG
+#if !DEBUG
                 PInvoke.AttachConsole(unchecked((uint)-1));
 #endif
 
@@ -95,6 +98,44 @@ namespace AppContainer
                 else
                 {
                     throw new ArgumentException("Background image or background color argument is missing. Please provide a valid path using the 'background-image' argument or a valid hex color code using the 'background-color' argument.");
+                }
+
+                if (arguments.TryGetValue("overlay-image", out string? overlayImagePath))
+                {
+                    try
+                    {
+                        if (!File.Exists(overlayImagePath))
+                        {
+                            throw new FileNotFoundException($"Overlay image not found at the specified path: {overlayImagePath}");
+                        }
+                        overlayImage = new Bitmap(overlayImagePath);
+                        Log($"Overlay image loaded successfully: {overlayImagePath}");
+
+                        // Parse overlay position
+                        if (arguments.TryGetValue("overlay-position", out string? position))
+                        {
+                            overlayPosition = position.ToLower();
+                            if (!IsValidOverlayPosition(overlayPosition))
+                            {
+                                throw new ArgumentException("Invalid overlay-position value. Valid values are: center, top-left, top-right, bottom-left, bottom-right.");
+                            }
+                            Log($"Overlay position set to: {overlayPosition}");
+                        }
+                        else
+                        {
+                            throw new ArgumentException("overlay-position argument is required when using an overlay image.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Error loading overlay image: {ex.Message}");
+                        if (overlayImage is not null)
+                        {
+                            overlayImage.Dispose();
+                        }
+                        overlayImage = null;
+                        overlayPosition = string.Empty;
+                    }
                 }
 
                 // Create the host window
@@ -166,9 +207,13 @@ namespace AppContainer
                 {
                     backgroundImage.Dispose();
                 }
+                if (overlayImage != null)
+                {
+                    overlayImage.Dispose();
+                }
                 Log("Application ended");
 
-#if DEBUG
+#if !DEBUG
                 PInvoke.FreeConsole();
 #endif
 
@@ -249,6 +294,7 @@ namespace AppContainer
 
             var style = PInvoke.GetWindowLong(appWindow, Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE);
             style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU);
+
             if (PInvoke.SetWindowLong(appWindow, Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE, style) == 0)
             {
                 Log($"Warning: Failed to set window style. Error code: {Marshal.GetLastWin32Error()}");
@@ -273,6 +319,7 @@ namespace AppContainer
 
             Log("App window embedded successfully");
         }
+
 
         /// <summary>
         /// Determines the size to use for the app window based on the provided arguments.
@@ -484,8 +531,21 @@ namespace AppContainer
                         var hdc = PInvoke.BeginPaint(hWnd, out var ps);
                         using (Graphics g = Graphics.FromHdc(hdc))
                         {
-                            var monitor = Utils.GetMonitorFromWindow(hWnd);
-                            g.DrawImage(backgroundImage, 0, 0, monitor.Width, monitor.Height);
+                            try
+                            {
+                                var monitor = Utils.GetMonitorFromWindow(hWnd);
+                                g.DrawImage(backgroundImage, 0, 0, monitor.Width, monitor.Height);
+
+                                // Draw the overlay image if it exists
+                                if (overlayImage is not null && !string.IsNullOrEmpty(overlayPosition))
+                                {
+                                    DrawOverlayImage(g, overlayImage, overlayPosition, monitor.Width, monitor.Height);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"Error during WM_PAINT: {ex.Message}");
+                            }
                         }
                         PInvoke.EndPaint(hWnd, ps);
                     }
@@ -526,6 +586,62 @@ namespace AppContainer
             return PInvoke.DefWindowProc(hWnd, msg, wParam, lParam);
         }
 
+        private static void DrawOverlayImage(Graphics g, Image image, string position, int hostWidth, int hostHeight)
+        {
+            try
+            {
+                int x, y;
+
+                switch (position)
+                {
+                    case "center":
+                        x = (hostWidth - image.Width) / 2;
+                        y = (hostHeight - image.Height) / 2;
+                        break;
+                    case "top-left":
+                        x = 0;
+                        y = 0;
+                        break;
+                    case "top-right":
+                        x = hostWidth - image.Width;
+                        y = 0;
+                        break;
+                    case "bottom-left":
+                        x = 0;
+                        y = hostHeight - image.Height;
+                        break;
+                    case "bottom-right":
+                        x = hostWidth - image.Width;
+                        y = hostHeight - image.Height;
+                        break;
+                    default:
+                        throw new ArgumentException("Invalid overlay position");
+                }
+
+                var colorMatrix = new ColorMatrix
+                {
+                    Matrix33 = 1.0f // Set the alpha value to 1 (fully opaque)
+                };
+                var imageAttributes = new ImageAttributes();
+                imageAttributes.SetColorMatrix(colorMatrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+
+                g.DrawImage(image, new Rectangle(x, y, image.Width, image.Height),
+                    0, 0, image.Width, image.Height, GraphicsUnit.Pixel, imageAttributes);
+
+                Log($"Overlay image drawn successfully at position: {position}");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error drawing overlay image: {ex.Message}");
+            }
+        }
+
+        private static bool IsValidOverlayPosition(string position)
+        {
+            return position == "center" || position == "top-left" || position == "top-right" ||
+                   position == "bottom-left" || position == "bottom-right";
+        }
+
         /// <summary>
         /// Logs a message to the console and, in debug mode, to a file.
         /// </summary>
@@ -533,7 +649,7 @@ namespace AppContainer
         private static void Log(string message)
         {
 
-#if DEBUG
+#if !DEBUG
             string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
             Console.WriteLine(logMessage);
             File.AppendAllText(logFilePath, logMessage + Environment.NewLine);

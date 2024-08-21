@@ -38,3 +38,5 @@ GetWindowTextLength
 MonitorFromWindow
 GetMonitorInfo
 GetDesktopWindow
+GetDC
+ReleaseDC
