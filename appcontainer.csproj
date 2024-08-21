@@ -29,7 +29,7 @@
     <TrimMode>full</TrimMode>
     <OptimizationPreference>Size</OptimizationPreference>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
-    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
+    <IlcFoldIdenticalMethodBodies>false</IlcFoldIdenticalMethodBodies>
     <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
     <IlcGenerateCompleteTypeMetadata>false</IlcGenerateCompleteTypeMetadata>
     <DebuggerSupport>false</DebuggerSupport>
