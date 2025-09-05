@@ -31,7 +31,7 @@ namespace AppContainer
         // Magnification API fields
         private static float zoomFactor = 1.0f;
         private static bool magnificationEnabled = false;
-        private static readonly float[] zoomLevels = { 1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f };
+        private static readonly float[] zoomLevels = [1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f];
         private static int currentZoomIndex = 0;
         private static HWND magnifierWindow = HWND.Null;
         private const string MAGNIFIER_WINDOW_CLASS = "Magnifier";
@@ -990,9 +990,6 @@ namespace AppContainer
 
         private const int COLOR_BTNFACE = 15;
         private const uint MS_SHOWMAGNIFIEDCURSOR = 0x0001;
-
-        private const uint VK_OEM_PLUS = 0xBB;
-        private const uint VK_OEM_MINUS = 0xBD;
 
         private const int HOTKEY_ZOOM_IN = 1;
         private const int HOTKEY_ZOOM_OUT = 2;
