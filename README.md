@@ -78,7 +78,7 @@ Contributions to AppContainer are welcome! Please feel free to submit pull reque
 
 ## License
 
-MIT
+GNU GPLv3
 
 ## Disclaimer
 

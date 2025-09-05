@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -7,14 +8,18 @@ using System.Text;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
+using Windows.Win32.UI.Magnification;
 
 namespace AppContainer
 {
     internal partial class Program
     {
-        private static readonly Windows.Win32.UI.WindowsAndMessaging.WNDPROC _wndProc = new Windows.Win32.UI.WindowsAndMessaging.WNDPROC(WindowProc);
+        private delegate LRESULT WndProcDelegate(HWND hwnd, uint msg, WPARAM wParam, LPARAM lParam);
+        private static readonly WndProcDelegate _wndProcDelegate = WindowProc;
         private static Process? appProcess;
         private static HWND hostWindow;
+        private static HWND magnifierHostWindow;
         private static Bitmap? backgroundImage;
         private static Bitmap? overlayImage;
         private static string? overlayPosition;
@@ -23,8 +28,25 @@ namespace AppContainer
         private static int appHeight;
         private static readonly string logFilePath = "AppContainer.log";
 
+        // Magnification API fields
+        private static float zoomFactor = 1.0f;
+        private static bool magnificationEnabled = false;
+        private static readonly float[] zoomLevels = { 1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f };
+        private static int currentZoomIndex = 0;
+        private static HWND magnifierWindow = HWND.Null;
+        private const string MAGNIFIER_WINDOW_CLASS = "Magnifier";
+        private const string MAGNIFIER_HOST_CLASS = "MagnifierHostClass";
+
         private delegate void WindowSizeChanged();
         private static event WindowSizeChanged? OnWindowSizeChanged;
+
+        // Magnification API imports
+        [DllImport("Magnification.dll")]
+        private static extern bool MagSetFullscreenUseBitmapSmoothing(bool useSmoothing);
+
+        [DllImport("Magnification.dll")]
+        private static extern bool MagSetLensUseBitmapSmoothing(bool useSmoothing);
+
 
         [STAThread]
         private static void Main(string[] args)
@@ -36,16 +58,15 @@ namespace AppContainer
                 PInvoke.AttachConsole(unchecked((uint)-1));
 #endif
 
-
                 Log("Application started");
 
+                // Parse window argument
                 if (arguments.TryGetValue("window-title", out var appWindowTitle))
                 {
-
                     appWindow = PInvoke.FindWindow(null, appWindowTitle);
                     if (appWindow == IntPtr.Zero)
                     {
-                        throw new InvalidOperationException($"Could not find a window with the title: '{appWindowTitle}'. Please ensure the app window is open and the title is correct.");
+                        throw new InvalidOperationException($"Could not find a window with the title: '{appWindowTitle}'");
                     }
                 }
                 else if (arguments.TryGetValue("window-handle", out var windowHandle))
@@ -54,197 +75,525 @@ namespace AppContainer
                 }
                 else
                 {
-                    throw new ArgumentException("Neither 'window-title' nor 'window-handle' argument provided. Please specify either the app window title or handle.");
+                    throw new ArgumentException("Neither 'window-title' nor 'window-handle' argument provided");
                 }
 
                 var monitor = Utils.GetMonitorFromWindow(appWindow);
 
-                // Load the background image or set the background color
-                if (arguments.TryGetValue("background-image", out string? backgroundImagePath))
+                // Load background
+                LoadBackground(arguments, monitor);
+
+                // Load overlay if specified
+                LoadOverlay(arguments);
+
+                // Parse dimensions
+                if (!arguments.TryGetValue("width", out var width) || !arguments.TryGetValue("height", out var height))
                 {
-                    if (!File.Exists(backgroundImagePath))
-                    {
-                        throw new FileNotFoundException($"Background image not found at the specified path: {backgroundImagePath}. Please ensure the file exists and the path is correct.");
-                    }
-                    backgroundImage = new Bitmap(backgroundImagePath);
-                    Log($"Background image loaded: {backgroundImagePath}");
-                }
-                else if (arguments.TryGetValue("background-color", out string? backgroundColorHex))
-                {
-                    if (!Utils.IsValidHexColor(backgroundColorHex))
-                    {
-                        throw new ArgumentException("Invalid background color hex value. Please provide a valid hex color code.");
-                    }
-                    Color backgroundColor = ColorTranslator.FromHtml(backgroundColorHex);
-                    backgroundImage = Utils.CreateSolidColorBitmap(backgroundColor,
-                    monitor.Width,
-                    monitor.Height);
-                    Log($"Background color set: {backgroundColorHex}");
-                }
-                else if (arguments.TryGetValue("background-gradient", out string? gradientColors))
-                {
-                    var colors = gradientColors.Split(';');
-                    if (colors.Length != 2 || !Utils.IsValidHexColor(colors[0]) || !Utils.IsValidHexColor(colors[1]))
-                    {
-                        throw new ArgumentException("Invalid background gradient value. Please provide two valid hex color codes separated by a semicolon.");
-                    }
-                    Color color1 = ColorTranslator.FromHtml(colors[0]);
-                    Color color2 = ColorTranslator.FromHtml(colors[1]);
-                    backgroundImage = Utils.CreateGradientBitmap(color1, color2,
-                        monitor.Width,
-                        monitor.Height);
-                    Log($"Background gradient set from {colors[0]} to {colors[1]}");
-                }
-                else
-                {
-                    throw new ArgumentException("Background image or background color argument is missing. Please provide a valid path using the 'background-image' argument or a valid hex color code using the 'background-color' argument.");
+                    throw new ArgumentException("Width and height arguments are required");
                 }
 
-                if (arguments.TryGetValue("overlay-image", out string? overlayImagePath))
+                if (!int.TryParse(width, out appWidth) || !int.TryParse(height, out appHeight))
                 {
-                    try
-                    {
-                        if (!File.Exists(overlayImagePath))
-                        {
-                            throw new FileNotFoundException($"Overlay image not found at the specified path: {overlayImagePath}");
-                        }
-                        overlayImage = new Bitmap(overlayImagePath);
-                        Log($"Overlay image loaded successfully: {overlayImagePath}");
-
-                        // Parse overlay position
-                        if (arguments.TryGetValue("overlay-position", out string? position))
-                        {
-                            overlayPosition = position.ToLower();
-                            if (!IsValidOverlayPosition(overlayPosition))
-                            {
-                                throw new ArgumentException("Invalid overlay-position value. Valid values are: center, top-left, top-right, bottom-left, bottom-right.");
-                            }
-                            Log($"Overlay position set to: {overlayPosition}");
-                        }
-                        else
-                        {
-                            throw new ArgumentException("overlay-position argument is required when using an overlay image.");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"Error loading overlay image: {ex.Message}");
-                        if (overlayImage is not null)
-                        {
-                            overlayImage.Dispose();
-                        }
-                        overlayImage = null;
-                        overlayPosition = string.Empty;
-                    }
+                    throw new ArgumentException("Invalid width or height value");
                 }
+
+                if (appWidth < -1 || appHeight < -1)
+                {
+                    throw new ArgumentOutOfRangeException("width/height", "Values must be -1, 0, or positive");
+                }
+
+                InitializeMagnification();
 
                 // Create the host window
                 hostWindow = CreateHostWindow(monitor);
                 if (hostWindow == IntPtr.Zero)
                 {
-                    throw new InvalidOperationException("Failed to create host window. Please check if you have sufficient permissions and system resources.");
+                    throw new InvalidOperationException("Failed to create host window");
                 }
                 Log("Host window created successfully");
-
-
 
                 appProcess = GetProcessByWindow(appWindow);
                 if (appProcess == null)
                 {
-                    throw new InvalidOperationException("Failed to find the app process. Please ensure the app is running and accessible.");
+                    throw new InvalidOperationException("Failed to find the app process");
                 }
                 Log($"App process found: {appProcess.ProcessName} (ID: {appProcess.Id})");
 
-                if (!arguments.TryGetValue("width", out var width))
-                {
-                    throw new ArgumentException("Width argument is missing. Please provide a valid width using the 'width' argument.");
-                }
-                if (!arguments.TryGetValue("height", out var height))
-                {
-                    throw new ArgumentException("Height argument is missing. Please provide a valid height using the 'height' argument.");
-                }
-
-                // Set desired app window size 
-                // (0 means fullscreen, -1 means use existing size)
-                if (!int.TryParse(width, out appWidth) || !int.TryParse(height, out appHeight))
-                {
-                    throw new ArgumentException("Invalid width or height value. Please provide valid integer values for width and height.");
-                }
-                if (appWidth < -1 || appHeight < -1)
-                {
-                    throw new ArgumentOutOfRangeException("width/height", "Invalid width or height value. Values must be -1 (use existing size), 0 (fullscreen), or a positive integer.");
-                }
-
-                // Set the host window title and icon to match the app window
                 UpdateHostWindowTitleAndIcon();
-
-                // Embed the app window as a child of the host window
                 EmbedAppWindow();
 
-                // Monitor the app process exit
+                // Create magnifier windows if enabled
+                if (magnificationEnabled)
+                {
+                    CreateMagnifierHostWindow();
+                    CreateMagnifierWindow();
+                    RegisterZoomHotkeys();
+
+                    // Set up timer for magnifier updates
+                    unsafe
+                    {
+                        PInvoke.SetTimer(hostWindow, 2, 16, null); // ~60 FPS
+                    }
+                }
+
+                // Monitor app process exit
                 appProcess.EnableRaisingEvents = true;
                 appProcess.Exited += (sender, e) =>
                 {
-                    Log("App process exited.");
-                    PInvoke.PostMessage(hostWindow, WM_CLOSE, 0, IntPtr.Zero);
+                    Log("App process exited");
+                    PInvoke.PostMessage(hostWindow, PInvoke.WM_CLOSE, 0, IntPtr.Zero);
                 };
 
-                // Subscribe to the window size changed event
                 OnWindowSizeChanged += HandleWindowSizeChanged;
 
-                // Run a message loop to keep the host window responsive
+                // Subscribe to focus tracking
+                FocusTracker.Subscribe(hostWindow, HandleFocusChange);
+                FocusTracker.SetEmbeddedWindow(appWindow);
+
                 RunMessageLoop();
             }
             catch (Exception ex)
             {
                 Log($"Fatal error: {ex.Message}\n{ex.StackTrace}");
-                string errorMessage = $"An error occurred: {ex.Message}\n\nFor more details, please check the log file at: {logFilePath}";
-                PInvoke.MessageBox(HWND.Null, errorMessage, "Error", Windows.Win32.UI.WindowsAndMessaging.MESSAGEBOX_STYLE.MB_OK | Windows.Win32.UI.WindowsAndMessaging.MESSAGEBOX_STYLE.MB_ICONERROR);
+                string errorMessage = $"An error occurred: {ex.Message}\n\nCheck log: {logFilePath}";
+                PInvoke.MessageBox(HWND.Null, errorMessage, "Error",
+                    Windows.Win32.UI.WindowsAndMessaging.MESSAGEBOX_STYLE.MB_OK |
+                    Windows.Win32.UI.WindowsAndMessaging.MESSAGEBOX_STYLE.MB_ICONERROR);
             }
             finally
             {
-                if (backgroundImage != null)
+                FocusTracker.Unsubscribe();
+                if (magnificationEnabled)
                 {
-                    backgroundImage.Dispose();
+                    UninitializeMagnification();
                 }
-                if (overlayImage != null)
-                {
-                    overlayImage.Dispose();
-                }
+                backgroundImage?.Dispose();
+                overlayImage?.Dispose();
                 Log("Application ended");
 
 #if !DEBUG
                 PInvoke.FreeConsole();
 #endif
-
                 Environment.Exit(0);
             }
         }
 
         /// <summary>
-        /// Creates the host window for the application.
+        /// Centralized focus change handler - all focus logic goes here
         /// </summary>
-        /// <returns>A handle to the created window, or IntPtr.Zero if the creation fails.</returns>
-        /// <exception cref="Exception">Thrown when window class registration or window creation fails.</exception>
+        private static void HandleFocusChange(FocusState state)
+        {
+            if (state == FocusState.HasFocus)
+            {
+                Log("Host window gained focus");
+
+                // Re-enable magnification if zoomed
+                if (magnificationEnabled && zoomFactor > 1.0f && magnifierHostWindow != HWND.Null)
+                {
+                    PInvoke.ShowWindow(magnifierHostWindow,
+                        Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+                    PInvoke.MagShowSystemCursor(false);
+                }
+
+                // Focus the embedded app
+                if (appWindow != HWND.Null)
+                {
+                    PInvoke.EnableWindow(appWindow, true);
+                    PInvoke.SetForegroundWindow(appWindow);
+                    PInvoke.SetFocus(appWindow);
+                }
+            }
+            else
+            {
+                Log("Host window lost focus");
+
+                // Hide magnification and restore cursor
+                if (magnificationEnabled && magnifierHostWindow != HWND.Null)
+                {
+                    PInvoke.ShowWindow(magnifierHostWindow,
+                        Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_HIDE);
+                    PInvoke.MagShowSystemCursor(true);
+                }
+            }
+        }
+
+        private static void LoadBackground(ImmutableDictionary<string, string> arguments, Monitor monitor)
+        {
+            if (arguments.TryGetValue("background-image", out string? backgroundImagePath))
+            {
+                if (!File.Exists(backgroundImagePath))
+                {
+                    throw new FileNotFoundException($"Background image not found: {backgroundImagePath}");
+                }
+                backgroundImage = new Bitmap(backgroundImagePath);
+                Log($"Background image loaded: {backgroundImagePath}");
+            }
+            else if (arguments.TryGetValue("background-color", out string? backgroundColorHex))
+            {
+                if (!Utils.IsValidHexColor(backgroundColorHex))
+                {
+                    throw new ArgumentException("Invalid background color hex value");
+                }
+                Color backgroundColor = ColorTranslator.FromHtml(backgroundColorHex);
+                backgroundImage = Utils.CreateSolidColorBitmap(backgroundColor, monitor.Width, monitor.Height);
+                Log($"Background color set: {backgroundColorHex}");
+            }
+            else if (arguments.TryGetValue("background-gradient", out string? gradientColors))
+            {
+                var colors = gradientColors.Split(';');
+                if (colors.Length != 2 || !Utils.IsValidHexColor(colors[0]) || !Utils.IsValidHexColor(colors[1]))
+                {
+                    throw new ArgumentException("Invalid gradient format");
+                }
+                Color color1 = ColorTranslator.FromHtml(colors[0]);
+                Color color2 = ColorTranslator.FromHtml(colors[1]);
+                backgroundImage = Utils.CreateGradientBitmap(color1, color2, monitor.Width, monitor.Height);
+                Log($"Background gradient set");
+            }
+            else
+            {
+                throw new ArgumentException("Background image or color required");
+            }
+        }
+
+        private static void LoadOverlay(ImmutableDictionary<string, string> arguments)
+        {
+            if (arguments.TryGetValue("overlay-image", out string? overlayImagePath))
+            {
+                if (!File.Exists(overlayImagePath))
+                {
+                    Log($"Warning: Overlay image not found: {overlayImagePath}");
+                    return;
+                }
+
+                overlayImage = new Bitmap(overlayImagePath);
+
+                if (arguments.TryGetValue("overlay-position", out string? position))
+                {
+                    overlayPosition = position.ToLower();
+                    if (!IsValidOverlayPosition(overlayPosition))
+                    {
+                        overlayImage.Dispose();
+                        overlayImage = null;
+                        throw new ArgumentException("Invalid overlay position");
+                    }
+                    Log($"Overlay loaded at position: {overlayPosition}");
+                }
+                else
+                {
+                    overlayImage.Dispose();
+                    overlayImage = null;
+                    throw new ArgumentException("overlay-position required with overlay-image");
+                }
+            }
+        }
+
+        private static void InitializeMagnification()
+        {
+            try
+            {
+                if (PInvoke.MagInitialize())
+                {
+                    magnificationEnabled = true;
+                    MagSetFullscreenUseBitmapSmoothing(true);
+                    MagSetLensUseBitmapSmoothing(true);
+                    Log("Magnification API initialized");
+                }
+                else
+                {
+                    Log("Warning: Magnification API failed to initialize");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error initializing Magnification API: {ex.Message}");
+            }
+        }
+
+        private unsafe static void CreateMagnifierHostWindow()
+        {
+            if (!magnificationEnabled) return;
+
+            try
+            {
+                HINSTANCE hInstance = new(Process.GetCurrentProcess().Handle);
+                var safeHandler = Process.GetCurrentProcess().SafeHandle;
+
+                ushort classId;
+                fixed (char* pClassName = MAGNIFIER_HOST_CLASS)
+                {
+                    Windows.Win32.UI.WindowsAndMessaging.WNDCLASSEXW wndClass = new()
+                    {
+                        cbSize = (uint)Marshal.SizeOf<Windows.Win32.UI.WindowsAndMessaging.WNDCLASSEXW>(),
+                        lpfnWndProc = (delegate* unmanaged[Stdcall]<HWND, uint, WPARAM, LPARAM, LRESULT>)
+                            Marshal.GetFunctionPointerForDelegate(_wndProcDelegate),
+                        hInstance = hInstance,
+                        lpszClassName = pClassName,
+                        hbrBackground = new HBRUSH((IntPtr)(1 + COLOR_BTNFACE))
+                    };
+
+                    classId = PInvoke.RegisterClassEx(in wndClass);
+                    if (classId == 0)
+                    {
+                        Log($"Warning: Failed to register magnifier host class");
+                        return;
+                    }
+                }
+
+                if (!PInvoke.GetWindowRect(hostWindow, out var hostRect)) return;
+
+                fixed (char* pClassName = MAGNIFIER_HOST_CLASS)
+                fixed (char* pWindowName = "MagnifierHost")
+                {
+                    magnifierHostWindow = PInvoke.CreateWindowEx(
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_TOPMOST |
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_LAYERED |
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_TOOLWINDOW |
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_TRANSPARENT |
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_NOACTIVATE,
+                        MAGNIFIER_HOST_CLASS,
+                        "MagnifierHost",
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP |
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CLIPCHILDREN,
+                        hostRect.left, hostRect.top,
+                        hostRect.right - hostRect.left,
+                        hostRect.bottom - hostRect.top,
+                        HWND.Null, null, safeHandler, null);
+                }
+
+                if (magnifierHostWindow == IntPtr.Zero)
+                {
+                    Log($"Warning: Failed to create magnifier host window");
+                    return;
+                }
+                PInvoke.SetLayeredWindowAttributes(magnifierHostWindow, default, 255, Windows.Win32.UI.WindowsAndMessaging.LAYERED_WINDOW_ATTRIBUTES_FLAGS.LWA_ALPHA);
+                PInvoke.ShowWindow(magnifierHostWindow,
+                    Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_HIDE);
+                Log("Magnifier host window created");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error creating magnifier host: {ex.Message}");
+            }
+        }
+
+        private unsafe static void CreateMagnifierWindow()
+        {
+            if (!magnificationEnabled || magnifierHostWindow == HWND.Null) return;
+
+            try
+            {
+                if (!PInvoke.GetClientRect(magnifierHostWindow, out var clientRect)) return;
+
+                int width = clientRect.right - clientRect.left;
+                int height = clientRect.bottom - clientRect.top;
+
+                magnifierWindow = PInvoke.CreateWindowEx(
+                    0,
+                    MAGNIFIER_WINDOW_CLASS,
+                    "Magnifier",
+                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD |
+                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_VISIBLE |
+                    (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)MS_SHOWMAGNIFIEDCURSOR,
+                    0, 0, width, height,
+                    magnifierHostWindow, null, null, null);
+
+                if (magnifierWindow == IntPtr.Zero)
+                {
+                    Log($"Warning: Failed to create magnifier window");
+                    return;
+                }
+
+                SetMagnifierTransform(1.0f);
+                Log("Magnifier window created");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error creating magnifier: {ex.Message}");
+            }
+        }
+
+        private static void UpdateMagnifierSource()
+        {
+            if (magnifierWindow == HWND.Null || !magnificationEnabled) return;
+
+            if (PInvoke.GetWindowRect(appWindow, out var appRect))
+            {
+                RECT sourceRect = new()
+                {
+                    left = appRect.left,
+                    top = appRect.top,
+                    right = appRect.right,
+                    bottom = appRect.bottom
+                };
+
+                PInvoke.MagSetWindowSource(magnifierWindow, sourceRect);
+                PInvoke.InvalidateRect(magnifierWindow, (RECT?)null, false);
+            }
+        }
+
+        private static void SetMagnifierTransform(float magnificationFactor)
+        {
+            if (magnifierWindow == HWND.Null || !magnificationEnabled) return;
+
+            try
+            {
+                MAGTRANSFORM transform = new();
+                transform.v[0] = magnificationFactor;
+                transform.v[4] = magnificationFactor;
+                transform.v[8] = 1;
+
+                if (PInvoke.MagSetWindowTransform(magnifierWindow, ref transform))
+                {
+                    Log($"Magnifier transform set to {magnificationFactor:F2}x");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error setting transform: {ex.Message}");
+            }
+        }
+
+        private static bool SetZoom(float magnificationFactor)
+        {
+            if (magnificationFactor < 1.0f || magnifierWindow == HWND.Null) return false;
+
+            zoomFactor = magnificationFactor;
+
+            if (Math.Abs(zoomFactor - 1.0f) < 0.01f)
+            {
+                PInvoke.ShowWindow(magnifierHostWindow,
+                    Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_HIDE);
+                PInvoke.MagShowSystemCursor(true);
+            }
+            else
+            {
+                SetMagnifierTransform(zoomFactor);
+                UpdateMagnifierSource();
+                ResizeMagnifierHostWindow();
+
+                // Only show if we have focus
+                if (PInvoke.GetForegroundWindow() == appWindow)
+                {
+                    PInvoke.ShowWindow(magnifierHostWindow,
+                        Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+                    PInvoke.MagShowSystemCursor(false);
+                }
+            }
+
+            Log($"Zoom level: {magnificationFactor:F2}x");
+            return true;
+        }
+
+        private static void ResizeMagnifierHostWindow()
+        {
+            if (magnifierHostWindow == HWND.Null || !magnificationEnabled) return;
+
+            if (!PInvoke.GetWindowRect(hostWindow, out var hostRect)) return;
+
+            int hostWidth = hostRect.right - hostRect.left;
+            int hostHeight = hostRect.bottom - hostRect.top;
+
+            int magWidth = (int)(appWidth * zoomFactor);
+            int magHeight = (int)(appHeight * zoomFactor);
+
+            // Center and clamp to screen
+            magWidth = Math.Min(magWidth, hostWidth);
+            magHeight = Math.Min(magHeight, hostHeight);
+
+            int x = hostRect.left + (hostWidth - magWidth) / 2;
+            int y = hostRect.top + (hostHeight - magHeight) / 2;
+
+            PInvoke.SetWindowPos(magnifierHostWindow, HWND.Null, x, y, magWidth, magHeight,
+                Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+                Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
+
+            if (magnifierWindow != HWND.Null)
+            {
+                PInvoke.MoveWindow(magnifierWindow, 0, 0, magWidth, magHeight, true);
+            }
+        }
+
+        private static void UninitializeMagnification()
+        {
+            if (!magnificationEnabled) return;
+
+            UnregisterZoomHotkeys();
+
+            if (magnifierWindow != HWND.Null)
+            {
+                PInvoke.DestroyWindow(magnifierWindow);
+                magnifierWindow = HWND.Null;
+            }
+
+            if (magnifierHostWindow != HWND.Null)
+            {
+                PInvoke.DestroyWindow(magnifierHostWindow);
+                magnifierHostWindow = HWND.Null;
+            }
+
+            PInvoke.MagUninitialize();
+            magnificationEnabled = false;
+            Log("Magnification uninitialized");
+        }
+
+        private static void RegisterZoomHotkeys()
+        {
+            PInvoke.RegisterHotKey(hostWindow, HOTKEY_ZOOM_IN,
+                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL, (uint)VIRTUAL_KEY.VK_OEM_PLUS);
+            PInvoke.RegisterHotKey(hostWindow, HOTKEY_ZOOM_OUT,
+                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL, (uint)VIRTUAL_KEY.VK_OEM_MINUS);
+            PInvoke.RegisterHotKey(hostWindow, HOTKEY_ZOOM_RESET,
+                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL, (uint)VIRTUAL_KEY.VK_0);
+            Log("Zoom hotkeys registered");
+        }
+
+        private static void UnregisterZoomHotkeys()
+        {
+            PInvoke.UnregisterHotKey(hostWindow, HOTKEY_ZOOM_IN);
+            PInvoke.UnregisterHotKey(hostWindow, HOTKEY_ZOOM_OUT);
+            PInvoke.UnregisterHotKey(hostWindow, HOTKEY_ZOOM_RESET);
+        }
+
+        private static void ZoomIn()
+        {
+            if (currentZoomIndex < zoomLevels.Length - 1)
+            {
+                currentZoomIndex++;
+                SetZoom(zoomLevels[currentZoomIndex]);
+            }
+        }
+
+        private static void ZoomOut()
+        {
+            if (currentZoomIndex > 0)
+            {
+                currentZoomIndex--;
+                SetZoom(zoomLevels[currentZoomIndex]);
+            }
+        }
+
+        private static void ResetZoom()
+        {
+            currentZoomIndex = 0;
+            SetZoom(1.0f);
+        }
+
         private unsafe static HWND CreateHostWindow(Monitor monitor)
         {
             HINSTANCE hInstance = new(Process.GetCurrentProcess().Handle);
-            if (hInstance == IntPtr.Zero)
-            {
-                throw new Exception($"Failed to get module handle. Error code: {Marshal.GetLastWin32Error()}");
-            }
 
             const string WindowClassName = "AppContainerClass";
             const string WindowName = "AppContainer";
 
             ushort classId;
             fixed (char* pClassName = WindowClassName)
-            fixed (char* pWindowName = WindowName)
             {
-                Windows.Win32.UI.WindowsAndMessaging.WNDCLASSEXW wndClass = new Windows.Win32.UI.WindowsAndMessaging.WNDCLASSEXW
+                Windows.Win32.UI.WindowsAndMessaging.WNDCLASSEXW wndClass = new()
                 {
                     cbSize = (uint)Marshal.SizeOf<Windows.Win32.UI.WindowsAndMessaging.WNDCLASSEXW>(),
-                    lpfnWndProc = _wndProc,
+                    lpfnWndProc = (delegate* unmanaged[Stdcall]<HWND, uint, WPARAM, LPARAM, LRESULT>)
+                        Marshal.GetFunctionPointerForDelegate(_wndProcDelegate),
                     hInstance = hInstance,
                     lpszClassName = pClassName,
                     hbrBackground = HBRUSH.Null
@@ -253,146 +602,143 @@ namespace AppContainer
                 classId = PInvoke.RegisterClassEx(in wndClass);
                 if (classId == 0)
                 {
-                    int error = Marshal.GetLastWin32Error();
-                    throw new Exception($"Failed to register window class. Error code: {error}");
+                    throw new Exception($"Failed to register window class");
                 }
+            }
 
-                Log($"Window class registered successfully. Class ID: {classId}");
-
+            fixed (char* pClassName = WindowClassName)
+            fixed (char* pWindowName = WindowName)
+            {
                 HWND hwnd = PInvoke.CreateWindowEx(
-                    0,
-                    pClassName,
-                    pWindowName,
-                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_VISIBLE,
-                    monitor.X,
-                    monitor.Y,
-                    monitor.Width,
-                    monitor.Height,
-                    HWND.Null,
-                    Windows.Win32.UI.WindowsAndMessaging.HMENU.Null,
-                    hInstance,
-                    null);
+                    0, pClassName, pWindowName,
+                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP |
+                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_VISIBLE,
+                    monitor.X, monitor.Y, monitor.Width, monitor.Height,
+                    HWND.Null, Windows.Win32.UI.WindowsAndMessaging.HMENU.Null,
+                    hInstance, null);
 
                 if (hwnd == IntPtr.Zero)
                 {
-                    int error = Marshal.GetLastWin32Error();
-                    throw new Exception($"Failed to create window. Error code: {error}");
+                    throw new Exception($"Failed to create window");
                 }
 
-                Log("Window created successfully");
                 return hwnd;
             }
         }
 
-        /// <summary>
-        /// Embeds the app window as a child of the host window.
-        /// </summary>
-        /// <exception cref="Exception">Thrown when setting the parent window fails.</exception>
         private static void EmbedAppWindow()
         {
-            // Remove the app window's title bar and border
-
-            var style = PInvoke.GetWindowLong(appWindow, Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE);
-            style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU);
-
-            if (PInvoke.SetWindowLong(appWindow, Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE, style) == 0)
-            {
-                Log($"Warning: Failed to set window style. Error code: {Marshal.GetLastWin32Error()}");
-            }
+            PInvoke.ShowWindow(appWindow, Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_RESTORE);
+            DetermineAppWindowSize();
 
             if (PInvoke.SetParent(appWindow, hostWindow) == HWND.Null)
             {
-                throw new Exception($"Failed to set parent window. Error code: {Marshal.GetLastWin32Error()}");
+                throw new Exception($"Failed to set parent window");
             }
 
-            // Determine the size to use for the app window
-            DetermineAppWindowSize();
-
-            // Center and resize the app window
             CenterAndResizeAppWindow();
 
-            // Set up a timer to periodically check for window size changes
-            if (PInvoke.SetTimer(hostWindow, 1, 100, null) == default)
+            var currentStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)PInvoke.GetWindowLong(appWindow,
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE);
+
+            if ((currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION) != 0 || (currentStyle &  Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME) != 0)
+            { 
+                var style = currentStyle;
+                style &= ~(Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MINIMIZE | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MAXIMIZE | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_SYSMENU);
+                style |=  Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD;
+
+                PInvoke.SetWindowLong(appWindow,
+                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE, (int)style);
+
+                PInvoke.SetWindowPos(appWindow, HWND.Null, 0, 0, 0, 0,
+                    Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
+                    Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+                    Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+                    Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_FRAMECHANGED);
+            }
+            else
             {
-                Log($"Warning: Failed to set timer. Error code: {Marshal.GetLastWin32Error()}");
+                PInvoke.SetWindowLong(appWindow,
+                    Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE,
+                    (int)(currentStyle |  Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD));
             }
 
-            Log("App window embedded successfully");
+            CenterAndResizeAppWindow();
+            Log($"App window embedded: {appWidth}x{appHeight}");
         }
 
-
-        /// <summary>
-        /// Determines the size to use for the app window based on the provided arguments.
-        /// </summary>
         private static void DetermineAppWindowSize()
         {
             if (appWidth == 0 && appHeight == 0)
             {
-                // Use fullscreen (host window size) if both width and height are 0
-                if (!PInvoke.GetClientRect(hostWindow, out var hostRect))
+                // For fullscreen mode, check if the app window has already been sized
+                // (e.g., by BorderlessGaming with PreserveClientArea)
+                if (PInvoke.GetWindowRect(appWindow, out var currentAppRect))
                 {
-                    Log($"Warning: Failed to get host window rect. Error code: {Marshal.GetLastWin32Error()}");
-                    return;
+                    int currentWidth = currentAppRect.right - currentAppRect.left;
+                    int currentHeight = currentAppRect.bottom - currentAppRect.top;
+
+                    // Get host window size for comparison
+                    if (PInvoke.GetClientRect(hostWindow, out var hostRect))
+                    {
+                        int hostWidth = hostRect.right - hostRect.left;
+                        int hostHeight = hostRect.bottom - hostRect.top;
+
+                        // If app window is smaller than host (likely PreserveClientArea), use app's current size
+                        if (currentWidth < hostWidth || currentHeight < hostHeight)
+                        {
+                            appWidth = currentWidth;
+                            appHeight = currentHeight;
+                            Log($"Using app's current size (likely PreserveClientArea): {appWidth}x{appHeight}");
+                        }
+                        else
+                        {
+                            // Otherwise use full host size
+                            appWidth = hostWidth;
+                            appHeight = hostHeight;
+                            Log($"Using host's full size: {appWidth}x{appHeight}");
+                        }
+                    }
                 }
-                appWidth = hostRect.right - hostRect.left;
-                appHeight = hostRect.bottom - hostRect.top;
-                Log($"Using fullscreen size: {appWidth}x{appHeight}");
             }
             else if (appWidth == -1 && appHeight == -1)
             {
-                // Use existing app window size if both width and height are -1
-                if (!PInvoke.GetWindowRect(appWindow, out var appRect))
+                if (PInvoke.GetClientRect(appWindow, out var appRect))
                 {
-                    Log($"Warning: Failed to get app window rect. Error code: {Marshal.GetLastWin32Error()}");
-                    return;
+                    appWidth = appRect.right - appRect.left;
+                    appHeight = appRect.bottom - appRect.top;
                 }
-
-                appWidth = appRect.right - appRect.left;
-                appHeight = appRect.bottom - appRect.top;
-                Log($"Using existing app window size: {appWidth}x{appHeight}");
-            }
-            else
-            {
-                // Use the specified size
-                Log($"Using specified app window size: {appWidth}x{appHeight}");
             }
         }
-        /// <summary>
-        /// Handles changes in the app window size.
-        /// </summary>
+
         private static void HandleWindowSizeChanged()
         {
-            if (!PInvoke.GetWindowRect(appWindow, out var appRect))
-            {
-                Log($"Warning: Failed to get window rect. Error code: {Marshal.GetLastWin32Error()}");
-                return;
-            }
+            if (!PInvoke.GetWindowRect(appWindow, out var appRect)) return;
 
             int newWidth = appRect.right - appRect.left;
             int newHeight = appRect.bottom - appRect.top;
 
-            // Only update if the size has actually changed
             if (newWidth != appWidth || newHeight != appHeight)
             {
                 appWidth = newWidth;
                 appHeight = newHeight;
-
                 CenterAndResizeAppWindow();
-                PInvoke.RedrawWindow(hostWindow, null, null, Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_INVALIDATE | Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_UPDATENOW);
-                Log($"Window size changed: {appWidth}x{appHeight}");
+
+                if (magnificationEnabled && magnifierWindow != HWND.Null && zoomFactor > 1.0f)
+                {
+                    UpdateMagnifierSource();
+                    ResizeMagnifierHostWindow();
+                }
+
+                PInvoke.RedrawWindow(hostWindow, null, null,
+                    Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_INVALIDATE |
+                    Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_UPDATENOW);
             }
         }
 
-        /// <summary>
-        /// Centers and resizes the app window within the host window.
-        /// </summary>
         private static void CenterAndResizeAppWindow()
         {
-            if (!PInvoke.GetClientRect(hostWindow, out var clientRect))
-            {
-                Log($"Warning: Failed to get client rect. Error code: {Marshal.GetLastWin32Error()}");
-                return;
-            }
+            if (!PInvoke.GetClientRect(hostWindow, out var clientRect)) return;
 
             int hostWidth = clientRect.right - clientRect.left;
             int hostHeight = clientRect.bottom - clientRect.top;
@@ -400,70 +746,34 @@ namespace AppContainer
             int x = (hostWidth - appWidth) / 2;
             int y = (hostHeight - appHeight) / 2;
 
-            if (!PInvoke.MoveWindow(appWindow, x, y, appWidth, appHeight, true))
-            {
-                Log($"Warning: Failed to move window. Error code: {Marshal.GetLastWin32Error()}");
-            }
+            PInvoke.MoveWindow(appWindow, x, y, appWidth, appHeight, true);
         }
 
-        /// <summary>
-        /// Updates the host window's title and icon to match the app window.
-        /// </summary>
         private unsafe static void UpdateHostWindowTitleAndIcon()
         {
-            // Get the app window title
             int bufferSize = PInvoke.GetWindowTextLength(appWindow) + 1;
-            //ADDRESS WONT CHANGE, THIS VARIABLE SHOULD BE USED WITH IN THIS SCOPE.
             fixed (char* windowNameChars = new char[bufferSize])
             {
-                if (PInvoke.GetWindowText(appWindow, windowNameChars, bufferSize) == 0)
-                {
-                    int error = Marshal.GetLastWin32Error();
-                    if (error != 0)  // Only log if there's an actual error, not just an empty title
-                    {
-                        Log($"Warning: Failed to get window text. Error code: {error}");
-                    }
-                }
-                else
+                if (PInvoke.GetWindowText(appWindow, windowNameChars, bufferSize) > 0)
                 {
                     string appWindowTitle = new(windowNameChars);
-                    // Log the title for debugging
-                    Log($"Retrieved window title: {appWindowTitle}");
-                    if (!PInvoke.SetWindowText(hostWindow, appWindowTitle))
-                    {
-                        Log($"Warning: Failed to set window text. Error code: {Marshal.GetLastWin32Error()}");
-                    }
-                    else
-                    {
-                        Log($"Successfully set host window title to: {appWindowTitle}");
-                    }
+                    PInvoke.SetWindowText(hostWindow, appWindowTitle);
                 }
-
             }
 
-            // Get the app window icon
-            IntPtr hIcon = PInvoke.SendMessage(appWindow, WM_GETICON, ICON_BIG, IntPtr.Zero);
+            IntPtr hIcon = PInvoke.SendMessage(appWindow, PInvoke.WM_GETICON, PInvoke.ICON_BIG, IntPtr.Zero);
             if (hIcon == IntPtr.Zero)
             {
-                nuint classLongPtr = PInvoke.GetClassLongPtr(appWindow, Windows.Win32.UI.WindowsAndMessaging.GET_CLASS_LONG_INDEX.GCL_HICON);
+                nuint classLongPtr = PInvoke.GetClassLongPtr(appWindow,
+                    Windows.Win32.UI.WindowsAndMessaging.GET_CLASS_LONG_INDEX.GCL_HICON);
                 hIcon = (IntPtr)classLongPtr;
             }
             if (hIcon != IntPtr.Zero)
             {
-                PInvoke.SendMessage(hostWindow, WM_SETICON, ICON_BIG, hIcon);
+                PInvoke.SendMessage(hostWindow,  PInvoke.WM_SETICON, PInvoke.ICON_BIG, hIcon);
             }
-            else
-            {
-                Log("Warning: Failed to get window icon.");
-            }
-
-            Log("Host window title and icon updated");
         }
 
-
-        /// <summary>
-        /// Runs the main message loop for the application.
-        /// </summary>
         private static void RunMessageLoop()
         {
             Log("Entering message loop");
@@ -473,7 +783,6 @@ namespace AppContainer
                 PInvoke.DispatchMessage(msg);
             }
 
-            // Cleanup and kill the app process if still running
             if (appProcess != null && !appProcess.HasExited)
             {
                 try
@@ -481,106 +790,145 @@ namespace AppContainer
                     appProcess.Kill();
                     Log("App process terminated");
                 }
-                catch (Exception ex)
-                {
-                    Log($"Error terminating app process: {ex.Message}");
-                }
+                catch { }
             }
             Log("Exiting message loop");
         }
 
-        /// <summary>
-        /// Retrieves the Process object associated with a given window handle.
-        /// </summary>
-        /// <param name="hWnd">The handle of the window.</param>
-        /// <returns>The Process object associated with the window, or null if not found.</returns>
         private unsafe static Process? GetProcessByWindow(HWND hWnd)
         {
             uint processId;
             uint threadId = PInvoke.GetWindowThreadProcessId(hWnd, &processId);
-            if (threadId is 0)
+            if (threadId == 0)
             {
-                throw new Exception("Unable to determine process for supplied window");
+                throw new Exception("Unable to determine process for window");
             }
+
             try
             {
                 return Process.GetProcessById((int)processId);
             }
-            catch (ArgumentException)
+            catch
             {
-                Log($"Warning: Process with ID {processId} not found.");
                 return null;
             }
         }
 
-        /// <summary>
-        /// The window procedure for handling window messages.
-        /// </summary>
-        /// <param name="hWnd">A handle to the window.</param>
-        /// <param name="msg">The message.</param>
-        /// <param name="wParam">Additional message information.</param>
-        /// <param name="lParam">Additional message information.</param>
-        /// <returns>The result of the message processing.</returns>
         private static LRESULT WindowProc(HWND hWnd, uint msg, WPARAM wParam, LPARAM lParam)
         {
             switch (msg)
             {
-                case WM_PAINT:
-                    if (backgroundImage is not null)
+                case PInvoke.WM_PAINT:
+                    if (hWnd == hostWindow && backgroundImage != null)
                     {
                         var hdc = PInvoke.BeginPaint(hWnd, out var ps);
                         using (Graphics g = Graphics.FromHdc(hdc))
                         {
-                            try
-                            {
-                                var monitor = Utils.GetMonitorFromWindow(hWnd);
-                                g.DrawImage(backgroundImage, 0, 0, monitor.Width, monitor.Height);
+                            var monitor = Utils.GetMonitorFromWindow(hWnd);
+                            g.DrawImage(backgroundImage, 0, 0, monitor.Width, monitor.Height);
 
-                                // Draw the overlay image if it exists
-                                if (overlayImage is not null && !string.IsNullOrEmpty(overlayPosition))
-                                {
-                                    DrawOverlayImage(g, overlayImage, overlayPosition, monitor.Width, monitor.Height);
-                                }
-                            }
-                            catch (Exception ex)
+                            if (overlayImage != null && !string.IsNullOrEmpty(overlayPosition))
                             {
-                                Log($"Error during WM_PAINT: {ex.Message}");
+                                DrawOverlayImage(g, overlayImage, overlayPosition, monitor.Width, monitor.Height);
                             }
                         }
                         PInvoke.EndPaint(hWnd, ps);
                     }
                     break;
 
-                case WM_SIZE:
-                    // Handle resize event
-                    CenterAndResizeAppWindow();
-                    PInvoke.RedrawWindow(hWnd, null, null, Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_INVALIDATE | Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_UPDATENOW);
+                case PInvoke.WM_SIZE:
+                    if (hWnd == hostWindow)
+                    {
+                        CenterAndResizeAppWindow();
+                        if (magnificationEnabled && magnifierHostWindow != HWND.Null && zoomFactor > 1.0f)
+                        {
+                            ResizeMagnifierHostWindow();
+                        }
+                        PInvoke.RedrawWindow(hWnd, null, null,
+                            Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_INVALIDATE |
+                            Windows.Win32.Graphics.Gdi.REDRAW_WINDOW_FLAGS.RDW_UPDATENOW);
+                    }
                     return (LRESULT)IntPtr.Zero;
 
-                case WM_CLOSE:
-                    // Cleanup and exit the host window
-                    PInvoke.DestroyWindow(hWnd);
-                    PInvoke.PostQuitMessage(0);
-                    break;
-
-                case WM_TIMER:
-                    // Check for window size changes
-
-                    if (PInvoke.GetWindowRect(appWindow, out var currentRect))
+                case PInvoke.WM_LBUTTONDOWN:
+                case PInvoke.WM_RBUTTONDOWN:
+                case PInvoke.WM_MBUTTONDOWN:
+                    if (hWnd == hostWindow)
                     {
-                        int currentWidth = currentRect.right - currentRect.left;
-                        int currentHeight = currentRect.bottom - currentRect.top;
-
-                        if (currentWidth != appWidth || currentHeight != appHeight)
+                        // Check if click is outside embedded app rect
+                        if (PInvoke.GetClientRect(hostWindow, out var clientRect))
                         {
-                            OnWindowSizeChanged?.Invoke();
+                            int hostWidth = clientRect.right - clientRect.left;
+                            int hostHeight = clientRect.bottom - clientRect.top;
+                            int appX = (hostWidth - appWidth) / 2;
+                            int appY = (hostHeight - appHeight) / 2;
+
+                            int x = (short)(lParam.Value & 0xFFFF);
+                            int y = (short)((lParam.Value >> 16) & 0xFFFF);
+
+                            if (x < appX || x > appX + appWidth || y < appY || y > appY + appHeight)
+                            {
+                                // Click is outside app rect - refocus the app
+                                if (appWindow != HWND.Null)
+                                {
+                                    PInvoke.SetForegroundWindow(appWindow);
+                                    PInvoke.SetFocus(appWindow);
+                                }
+                                return (LRESULT)IntPtr.Zero;
+                            }
                         }
                     }
-                    else
+                    break;
+
+                case PInvoke.WM_CLOSE:
+                    if (hWnd == hostWindow)
                     {
-                        Log($"Warning: Failed to get window rect in WM_TIMER. Error code: {Marshal.GetLastWin32Error()}");
+                        PInvoke.DestroyWindow(hWnd);
+                        PInvoke.PostQuitMessage(0);
                     }
                     break;
+
+                case PInvoke.WM_TIMER:
+                    if (hWnd == hostWindow)
+                    {
+                        if (wParam.Value == 1)
+                        {
+                            if (PInvoke.GetWindowRect(appWindow, out var currentRect))
+                            {
+                                int currentWidth = currentRect.right - currentRect.left;
+                                int currentHeight = currentRect.bottom - currentRect.top;
+
+                                if (currentWidth != appWidth || currentHeight != appHeight)
+                                {
+                                    OnWindowSizeChanged?.Invoke();
+                                }
+                            }
+                        }
+                        else if (wParam.Value == 2 && magnificationEnabled &&
+                                 magnifierWindow != HWND.Null && zoomFactor > 1.0f)
+                        {
+                            UpdateMagnifierSource();
+                        }
+                    }
+                    break;
+
+                case PInvoke.WM_HOTKEY:
+                    if (hWnd == hostWindow && magnificationEnabled)
+                    {
+                        switch (wParam.Value)
+                        {
+                            case HOTKEY_ZOOM_IN:
+                                ZoomIn();
+                                break;
+                            case HOTKEY_ZOOM_OUT:
+                                ZoomOut();
+                                break;
+                            case HOTKEY_ZOOM_RESET:
+                                ResetZoom();
+                                break;
+                        }
+                    }
+                    return (LRESULT)IntPtr.Zero;
             }
 
             return PInvoke.DefWindowProc(hWnd, msg, wParam, lParam);
@@ -588,52 +936,39 @@ namespace AppContainer
 
         private static void DrawOverlayImage(Graphics g, Image image, string position, int hostWidth, int hostHeight)
         {
-            try
+            int x, y;
+
+            switch (position)
             {
-                int x, y;
-
-                switch (position)
-                {
-                    case "center":
-                        x = (hostWidth - image.Width) / 2;
-                        y = (hostHeight - image.Height) / 2;
-                        break;
-                    case "top-left":
-                        x = 0;
-                        y = 0;
-                        break;
-                    case "top-right":
-                        x = hostWidth - image.Width;
-                        y = 0;
-                        break;
-                    case "bottom-left":
-                        x = 0;
-                        y = hostHeight - image.Height;
-                        break;
-                    case "bottom-right":
-                        x = hostWidth - image.Width;
-                        y = hostHeight - image.Height;
-                        break;
-                    default:
-                        throw new ArgumentException("Invalid overlay position");
-                }
-
-                var colorMatrix = new ColorMatrix
-                {
-                    Matrix33 = 1.0f // Set the alpha value to 1 (fully opaque)
-                };
-                var imageAttributes = new ImageAttributes();
-                imageAttributes.SetColorMatrix(colorMatrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-
-                g.DrawImage(image, new Rectangle(x, y, image.Width, image.Height),
-                    0, 0, image.Width, image.Height, GraphicsUnit.Pixel, imageAttributes);
-
-                Log($"Overlay image drawn successfully at position: {position}");
+                case "center":
+                    x = (hostWidth - image.Width) / 2;
+                    y = (hostHeight - image.Height) / 2;
+                    break;
+                case "top-left":
+                    x = y = 0;
+                    break;
+                case "top-right":
+                    x = hostWidth - image.Width;
+                    y = 0;
+                    break;
+                case "bottom-left":
+                    x = 0;
+                    y = hostHeight - image.Height;
+                    break;
+                case "bottom-right":
+                    x = hostWidth - image.Width;
+                    y = hostHeight - image.Height;
+                    break;
+                default:
+                    return;
             }
-            catch (Exception ex)
-            {
-                Log($"Error drawing overlay image: {ex.Message}");
-            }
+
+            var colorMatrix = new ColorMatrix { Matrix33 = 1.0f };
+            var imageAttributes = new ImageAttributes();
+            imageAttributes.SetColorMatrix(colorMatrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+
+            g.DrawImage(image, new Rectangle(x, y, image.Width, image.Height),
+                0, 0, image.Width, image.Height, GraphicsUnit.Pixel, imageAttributes);
         }
 
         private static bool IsValidOverlayPosition(string position)
@@ -642,41 +977,26 @@ namespace AppContainer
                    position == "bottom-left" || position == "bottom-right";
         }
 
-        /// <summary>
-        /// Logs a message to the console and, in debug mode, to a file.
-        /// </summary>
-        /// <param name="message">The message to log.</param>
         private static void Log(string message)
         {
 
-#if !DEBUG
             string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
             Console.WriteLine(logMessage);
             File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
-#endif
 
         }
 
+        #region Win32 Constants
 
-        #region Win32 API
+        private const int COLOR_BTNFACE = 15;
+        private const uint MS_SHOWMAGNIFIEDCURSOR = 0x0001;
 
-        private const int WS_POPUP = unchecked((int)0x80000000);
-        private const int WS_VISIBLE = 0x10000000;
-        private const int WS_CAPTION = 0xC00000;
-        private const int WS_THICKFRAME = 0x40000;
-        private const int WS_MINIMIZE = 0x20000000;
-        private const int WS_MAXIMIZE = 0x1000000;
-        private const int WS_SYSMENU = 0x80000;
+        private const uint VK_OEM_PLUS = 0xBB;
+        private const uint VK_OEM_MINUS = 0xBD;
 
-        private const int GWL_STYLE = -16;
-        private const uint WM_PAINT = 0x000F;
-        private const uint WM_SIZE = 0x0005;
-        private const uint WM_CLOSE = 0x0010;
-        private const uint WM_TIMER = 0x0113;
-        private const uint WM_GETICON = 0x007F;
-        private const uint WM_SETICON = 0x0080;
-        private const int ICON_BIG = 1;
-        private const int GCL_HICON = -14;
+        private const int HOTKEY_ZOOM_IN = 1;
+        private const int HOTKEY_ZOOM_OUT = 2;
+        private const int HOTKEY_ZOOM_RESET = 3;
 
         #endregion
     }
