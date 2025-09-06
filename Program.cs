@@ -539,13 +539,38 @@ namespace AppContainer
 
         private static void RegisterZoomHotkeys()
         {
-            PInvoke.RegisterHotKey(hostWindow, HOTKEY_ZOOM_IN,
-                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL, (uint)VIRTUAL_KEY.VK_OEM_PLUS);
-            PInvoke.RegisterHotKey(hostWindow, HOTKEY_ZOOM_OUT,
-                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL, (uint)VIRTUAL_KEY.VK_OEM_MINUS);
-            PInvoke.RegisterHotKey(hostWindow, HOTKEY_ZOOM_RESET,
-                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL, (uint)VIRTUAL_KEY.VK_0);
+            TryRegisterHotkey(HOTKEY_ZOOM_IN,
+                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL | HOT_KEY_MODIFIERS.MOD_SHIFT,
+                (uint)VIRTUAL_KEY.VK_OEM_PLUS,
+                "Zoom In");
+
+            TryRegisterHotkey(HOTKEY_ZOOM_OUT,
+                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL | HOT_KEY_MODIFIERS.MOD_SHIFT,
+                (uint)VIRTUAL_KEY.VK_OEM_MINUS,
+                "Zoom Out");
+
+            TryRegisterHotkey(HOTKEY_ZOOM_RESET,
+                Windows.Win32.UI.Input.KeyboardAndMouse.HOT_KEY_MODIFIERS.MOD_CONTROL | HOT_KEY_MODIFIERS.MOD_SHIFT,
+                (uint)VIRTUAL_KEY.VK_0,
+                "Zoom Reset");
+
             Log("Zoom hotkeys registered");
+        }
+        //@ 
+        private static void TryRegisterHotkey(int id, HOT_KEY_MODIFIERS mod, uint vk, string hotkeyName)
+        {
+            var keyCombo = $"{mod}+{(VIRTUAL_KEY)vk}";
+            Log($"Attempting to register hotkey '{hotkeyName}' (ID {id}) with combination {keyCombo}");
+
+            if (!PInvoke.RegisterHotKey(hostWindow, id, mod, vk))
+            {
+                var error = Marshal.GetLastPInvokeError();
+                var message = Marshal.GetLastPInvokeErrorMessage();
+                Log($"Failed to register hotkey '{hotkeyName}' ({keyCombo}): Error {error} - {message}");
+                return;
+            }
+
+            Log($"Successfully registered hotkey '{hotkeyName}' ({keyCombo})");
         }
 
         private static void UnregisterZoomHotkeys()
@@ -641,11 +666,11 @@ namespace AppContainer
             var currentStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)PInvoke.GetWindowLong(appWindow,
                 Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE);
 
-            if ((currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION) != 0 || (currentStyle &  Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME) != 0)
-            { 
+            if ((currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION) != 0 || (currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME) != 0)
+            {
                 var style = currentStyle;
                 style &= ~(Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MINIMIZE | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MAXIMIZE | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_SYSMENU);
-                style |=  Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD;
+                style |= Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD;
 
                 PInvoke.SetWindowLong(appWindow,
                     Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE, (int)style);
@@ -660,7 +685,7 @@ namespace AppContainer
             {
                 PInvoke.SetWindowLong(appWindow,
                     Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE,
-                    (int)(currentStyle |  Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD));
+                    (int)(currentStyle | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD));
             }
 
             CenterAndResizeAppWindow();
@@ -770,7 +795,7 @@ namespace AppContainer
             }
             if (hIcon != IntPtr.Zero)
             {
-                PInvoke.SendMessage(hostWindow,  PInvoke.WM_SETICON, PInvoke.ICON_BIG, hIcon);
+                PInvoke.SendMessage(hostWindow, PInvoke.WM_SETICON, PInvoke.ICON_BIG, hIcon);
             }
         }
 
