@@ -651,6 +651,65 @@ namespace AppContainer
             }
         }
 
+        private static async void RemoveWindowStylesDelayed()
+        {
+            // Wait for window to settle
+            await Task.Delay(500);
+
+            // Remove all border-related styles similar to BorderlessGaming's approach
+            var currentStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)PInvoke.GetWindowLong(
+                appWindow,
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE);
+
+            var currentExtendedStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE)PInvoke.GetWindowLong(
+                appWindow,
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE);
+
+            // Remove standard styles (matching BorderlessGaming's ComputeRemovedStyles)
+            currentStyle &= ~(
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_SYSMENU |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MAXIMIZEBOX |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MINIMIZEBOX |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_DLGFRAME |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_BORDER
+            );
+
+            // Ensure WS_CHILD is set since it's embedded
+            currentStyle |= Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD;
+
+            // Remove extended styles (matching BorderlessGaming's approach)
+            currentExtendedStyle &= ~(
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_DLGMODALFRAME |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_COMPOSITED |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_WINDOWEDGE |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_CLIENTEDGE |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_LAYERED |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_STATICEDGE |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_TOOLWINDOW |
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_APPWINDOW
+            );
+
+            // Apply the new styles
+            PInvoke.SetWindowLong(appWindow,
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE,
+                (int)currentStyle);
+
+            PInvoke.SetWindowLong(appWindow,
+                Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE,
+                (int)currentExtendedStyle);
+
+            // Force a frame change to apply the new styles
+            PInvoke.SetWindowPos(appWindow, HWND.Null, 0, 0, 0, 0,
+                Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
+                Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+                Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+                Windows.Win32.UI.WindowsAndMessaging.SET_WINDOW_POS_FLAGS.SWP_FRAMECHANGED);
+
+            Log("Window styles removed after settling");
+        }
+
         private static void EmbedAppWindow()
         {
             PInvoke.ShowWindow(appWindow, Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_RESTORE);
@@ -666,10 +725,15 @@ namespace AppContainer
             var currentStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)PInvoke.GetWindowLong(appWindow,
                 Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE);
 
-            if ((currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION) != 0 || (currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME) != 0)
+            if ((currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION) != 0 ||
+                (currentStyle & Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME) != 0)
             {
                 var style = currentStyle;
-                style &= ~(Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MINIMIZE | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MAXIMIZE | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_SYSMENU);
+                style &= ~(Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION |
+                           Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME |
+                           Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MINIMIZE |
+                           Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_MAXIMIZE |
+                           Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_SYSMENU);
                 style |= Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD;
 
                 PInvoke.SetWindowLong(appWindow,
@@ -690,6 +754,9 @@ namespace AppContainer
 
             CenterAndResizeAppWindow();
             Log($"App window embedded: {appWidth}x{appHeight}");
+
+            // Schedule the delayed style removal to ensure everything is properly settled
+            Task.Run(RemoveWindowStylesDelayed);
         }
 
         private static void DetermineAppWindowSize()
