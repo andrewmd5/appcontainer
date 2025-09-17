@@ -86,3 +86,6 @@ ICON_BIG
 GetSysColor
 MS_SHOWMAGNIFIEDCURSOR
 VIRTUAL_KEY
+GetDpiForWindow
+GetDpiAwarenessContextForProcess
+GetAwarenessFromDpiAwarenessContext

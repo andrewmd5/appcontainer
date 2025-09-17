@@ -15,7 +15,7 @@ public static partial class Utils
     /// <param name="args">An array of strings representing command-line arguments.</param>
     /// <returns>An ImmutableDictionary where keys are argument names (without "--") and values are the corresponding argument values.</returns>
     /// <remarks>
-    /// Arguments should be in the format "--name value". 
+    /// Arguments should be in the format "--name value".
     /// If an argument starts with "--" but has no following value, its value will be an empty string.
     /// </remarks>
     public static ImmutableDictionary<string, string> ParseArguments(string[] args)
@@ -49,20 +49,35 @@ public static partial class Utils
     /// <exception cref="ArgumentException">Thrown when the input string is null, empty, or not a valid number.</exception>
     /// <exception cref="OverflowException">Thrown when the number is too large to fit in an nint.</exception>
     /// <exception cref="InvalidOperationException">Thrown when the handle does not refer to an existing window.</exception>
-    internal static Windows.Win32.Foundation.HWND ConvertAndValidateWindowHandle(string handleString)
+    internal static Windows.Win32.Foundation.HWND ConvertAndValidateWindowHandle(
+        string handleString
+    )
     {
         if (string.IsNullOrWhiteSpace(handleString))
         {
-            throw new ArgumentException("Handle string cannot be null or empty.", nameof(handleString));
+            throw new ArgumentException(
+                "Handle string cannot be null or empty.",
+                nameof(handleString)
+            );
         }
 
         long longHandle;
         if (handleString.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             // Hexadecimal input
-            if (!long.TryParse(handleString.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out longHandle))
+            if (
+                !long.TryParse(
+                    handleString.AsSpan(2),
+                    System.Globalization.NumberStyles.HexNumber,
+                    null,
+                    out longHandle
+                )
+            )
             {
-                throw new ArgumentException("Invalid hexadecimal handle string. Must be a valid hexadecimal number with '0x' prefix.", nameof(handleString));
+                throw new ArgumentException(
+                    "Invalid hexadecimal handle string. Must be a valid hexadecimal number with '0x' prefix.",
+                    nameof(handleString)
+                );
             }
         }
         else
@@ -70,7 +85,10 @@ public static partial class Utils
             // Decimal input
             if (!long.TryParse(handleString, out longHandle))
             {
-                throw new ArgumentException("Invalid handle string. Must be a valid decimal number or hexadecimal number with '0x' prefix.", nameof(handleString));
+                throw new ArgumentException(
+                    "Invalid handle string. Must be a valid decimal number or hexadecimal number with '0x' prefix.",
+                    nameof(handleString)
+                );
             }
         }
 
@@ -80,7 +98,9 @@ public static partial class Utils
         // Validate if the window handle refers to an existing window
         if (!PInvoke.IsWindow(windowHandle))
         {
-            throw new InvalidOperationException("The specified window handle does not refer to an existing window.");
+            throw new InvalidOperationException(
+                "The specified window handle does not refer to an existing window."
+            );
         }
 
         return windowHandle;
@@ -113,7 +133,6 @@ public static partial class Utils
         return HexRegex().IsMatch(hexColor);
     }
 
-
     /// <summary>
     /// Creates a gradient bitmap from two colors.
     /// </summary>
@@ -127,7 +146,12 @@ public static partial class Utils
         Bitmap bmp = new(width, height);
         using (Graphics g = Graphics.FromImage(bmp))
         {
-            using LinearGradientBrush brush = new LinearGradientBrush(new Rectangle(0, 0, width, height), color1, color2, LinearGradientMode.Vertical);
+            using LinearGradientBrush brush = new LinearGradientBrush(
+                new Rectangle(0, 0, width, height),
+                color1,
+                color2,
+                LinearGradientMode.Vertical
+            );
             g.FillRectangle(brush, 0, 0, width, height);
         }
         return bmp;
@@ -145,16 +169,24 @@ public static partial class Utils
         {
             windowHandle = PInvoke.GetDesktopWindow();
         }
-        var hMonitor = PInvoke.MonitorFromWindow(windowHandle, Windows.Win32.Graphics.Gdi.MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONEAREST);
+        var hMonitor = PInvoke.MonitorFromWindow(
+            windowHandle,
+            Windows.Win32.Graphics.Gdi.MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONEAREST
+        );
         Windows.Win32.Graphics.Gdi.MONITORINFO monitorInfo = new()
         {
-            cbSize = (uint)Marshal.SizeOf<Windows.Win32.Graphics.Gdi.MONITORINFO>()
+            cbSize = (uint)Marshal.SizeOf<Windows.Win32.Graphics.Gdi.MONITORINFO>(),
         };
         if (!PInvoke.GetMonitorInfo(hMonitor, ref monitorInfo))
         {
             throw new Exception("Unable to determine info for monitor");
         }
-        return new Monitor(monitorInfo.rcMonitor.X, monitorInfo.rcMonitor.Y, monitorInfo.rcMonitor.Width, monitorInfo.rcMonitor.Height);
+        return new Monitor(
+            monitorInfo.rcMonitor.X,
+            monitorInfo.rcMonitor.Y,
+            monitorInfo.rcMonitor.Width,
+            monitorInfo.rcMonitor.Height
+        );
     }
 
     [System.Text.RegularExpressions.GeneratedRegex("^#([0-9A-Fa-f]{6})$")]

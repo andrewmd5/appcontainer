@@ -8,13 +8,21 @@ using Windows.Win32.UI.Accessibility;
 public enum FocusState
 {
     HasFocus,
-    LostFocus
+    LostFocus,
 }
 
 public static class FocusTracker
 {
     private static UnhookWinEventSafeHandle? _unhookWinHandle;
-    private static unsafe delegate* unmanaged[Stdcall]<HWINEVENTHOOK, uint, HWND, int, int, uint, uint, void> _winEventProcDelegate;
+    private static unsafe delegate* unmanaged[Stdcall]<
+        HWINEVENTHOOK,
+        uint,
+        HWND,
+        int,
+        int,
+        uint,
+        uint,
+        void> _winEventProcDelegate;
     private static Action<FocusState>? _handler;
     private static HWND _hostWindow;
     private static HWND _embeddedWindow;
@@ -29,7 +37,7 @@ public static class FocusTracker
     {
         _hostWindow = hostWindow;
         _handler = handler;
-        
+
         unsafe
         {
             _winEventProcDelegate = &WinEventProc;
@@ -40,9 +48,10 @@ public static class FocusTracker
                 _winEventProcDelegate,
                 0,
                 0,
-                PInvoke.WINEVENT_OUTOFCONTEXT);
+                PInvoke.WINEVENT_OUTOFCONTEXT
+            );
         }
-        
+
         // Check initial focus state
         CheckCurrentFocus();
     }
@@ -98,7 +107,7 @@ public static class FocusTracker
 
         var foregroundWindow = PInvoke.GetForegroundWindow();
         var newState = IsOurWindow(foregroundWindow) ? FocusState.HasFocus : FocusState.LostFocus;
-        
+
         if (newState != _lastState)
         {
             _lastState = newState;
@@ -114,7 +123,8 @@ public static class FocusTracker
         int idObject,
         int idChild,
         uint dwEventThread,
-        uint dwmsEventTime)
+        uint dwmsEventTime
+    )
     {
         if (_handler == null || _hostWindow == HWND.Null)
         {
@@ -123,7 +133,7 @@ public static class FocusTracker
 
         // Check if the newly focused window belongs to our container
         FocusState newState = IsOurWindow(hwnd) ? FocusState.HasFocus : FocusState.LostFocus;
-        
+
         // Only notify if the state actually changed
         if (newState != _lastState)
         {
