@@ -1301,37 +1301,24 @@ namespace AppContainer
                 case PInvoke.WM_MBUTTONDOWN:
                     if (hWnd == hostWindow)
                     {
-
-                        if (PInvoke.GetClientRect(hostWindow, out var clientRect))
+                        // Get the actual position of the app window relative to its parent (host window)
+                        if (PInvoke.GetWindowRect(appWindow, out var appRect) &&
+                            PInvoke.GetWindowRect(hostWindow, out var hostRect))
                         {
+                            // Convert app window coordinates to be relative to host window
+                            int appLeft = appRect.left - hostRect.left;
+                            int appTop = appRect.top - hostRect.top;
+                            int appRight = appLeft + (appRect.right - appRect.left);
+                            int appBottom = appTop + (appRect.bottom - appRect.top);
+
+                            // Get click position
                             int x = (short)(lParam.Value & 0xFFFF);
                             int y = (short)((lParam.Value >> 16) & 0xFFFF);
 
-
-                            int appLeft,
-                                appTop;
-                            if (useCustomPosition)
+                            // Check if click is outside the app window
+                            if (x < appLeft || x >= appRight || y < appTop || y >= appBottom)
                             {
-
-                                appLeft = appX - currentMonitor.X;
-                                appTop = appY - currentMonitor.Y;
-                            }
-                            else
-                            {
-                                int hostWidth = clientRect.right - clientRect.left;
-                                int hostHeight = clientRect.bottom - clientRect.top;
-                                appLeft = (hostWidth - appWidth) / 2;
-                                appTop = (hostHeight - appHeight) / 2;
-                            }
-
-                            if (
-                                x < appLeft
-                                || x > appLeft + appWidth
-                                || y < appTop
-                                || y > appTop + appHeight
-                            )
-                            {
-
+                                // Click is on the background, focus the app window
                                 if (appWindow != HWND.Null)
                                 {
                                     PInvoke.SetForegroundWindow(appWindow);
