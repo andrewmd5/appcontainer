@@ -34,7 +34,7 @@ namespace AppContainer
 
         private static Windows.Win32.UI.HiDpi.DPI_AWARENESS appDpiAwareness;
 
-        
+
         private static float zoomFactor = 1.0f;
         private static bool magnificationEnabled = false;
         private static readonly float[] zoomLevels =
@@ -57,7 +57,7 @@ namespace AppContainer
         private delegate void WindowSizeChanged();
         private static event WindowSizeChanged? OnWindowSizeChanged;
 
-        
+
         [DllImport("Magnification.dll")]
         private static extern bool MagSetFullscreenUseBitmapSmoothing(bool useSmoothing);
 
@@ -69,7 +69,7 @@ namespace AppContainer
         {
             try
             {
-                
+
                 var arguments = Utils.ParseArguments(args);
 #if !DEBUG
                 PInvoke.AttachConsole(unchecked((uint)-1));
@@ -77,7 +77,7 @@ namespace AppContainer
 
                 Log("Application started (DPI-unaware mode)");
 
-                
+
                 if (arguments.TryGetValue("window-title", out var appWindowTitle))
                 {
                     appWindow = PInvoke.FindWindow(null, appWindowTitle);
@@ -107,43 +107,51 @@ namespace AppContainer
 
                 currentMonitor = Utils.GetMonitorFromWindow(appWindow);
 
-                
+
                 LoadBackground(arguments, currentMonitor);
 
-                
+
                 LoadOverlay(arguments);
 
-                
+
                 ParseWindowGeometry(arguments, currentMonitor);
 
                 InitializeMagnification();
 
-                
+
                 hostWindow = CreateHostWindow(currentMonitor);
                 if (hostWindow == IntPtr.Zero)
                 {
                     throw new InvalidOperationException("Failed to create host window");
+                }
+                if (appProcess != null)
+                {
+                    PInvoke.SetWindowLong(
+                        hostWindow,
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWLP_USERDATA,
+                        appProcess.Id
+                    );
                 }
                 Log("Host window created successfully");
 
                 UpdateHostWindowTitleAndIcon();
                 EmbedAppWindow();
 
-                
+
                 if (magnificationEnabled)
                 {
                     CreateMagnifierHostWindow();
                     CreateMagnifierWindow();
                     RegisterZoomHotkeys();
 
-                    
+
                     unsafe
                     {
-                        PInvoke.SetTimer(hostWindow, 2, 16, null); 
+                        PInvoke.SetTimer(hostWindow, 2, 16, null);
                     }
                 }
 
-                
+
                 appProcess.EnableRaisingEvents = true;
                 appProcess.Exited += (sender, e) =>
                 {
@@ -153,7 +161,7 @@ namespace AppContainer
 
                 OnWindowSizeChanged += HandleWindowSizeChanged;
 
-                
+
                 FocusTracker.Subscribe(hostWindow, HandleFocusChange);
                 FocusTracker.SetEmbeddedWindow(appWindow);
 
@@ -195,7 +203,7 @@ namespace AppContainer
             Monitor monitor
         )
         {
-            
+
             if (
                 !arguments.TryGetValue("width", out var width)
                 || !arguments.TryGetValue("height", out var height)
@@ -217,7 +225,7 @@ namespace AppContainer
                 );
             }
 
-            
+
             if (appProcess != null)
             {
                 var dpiContext = PInvoke.GetDpiAwarenessContextForProcess(appProcess.SafeHandle);
@@ -225,21 +233,21 @@ namespace AppContainer
 
                 Log($"Process DPI Awareness: {appDpiAwareness}");
 
-                
+
                 uint windowDpi = PInvoke.GetDpiForWindow(appWindow);
                 float dpiScale = windowDpi / 96.0f;
                 Log($"Window DPI: {windowDpi} (scale: {dpiScale:F2})");
             }
             else
             {
-                
+
                 appDpiAwareness = Windows.Win32.UI.HiDpi.DPI_AWARENESS.DPI_AWARENESS_UNAWARE;
                 Log(
                     $"Warning: Could not get process handle for DPI awareness check, assuming DPI_UNAWARE"
                 );
             }
 
-            
+
             if (
                 arguments.TryGetValue("x", out var xStr) && arguments.TryGetValue("y", out var yStr)
             )
@@ -251,8 +259,8 @@ namespace AppContainer
                         $"Original coordinates from BorderlessGaming: X={appX}, Y={appY}, W={appWidth}, H={appHeight}"
                     );
 
-                    
-                    
+
+
                     if (
                         appDpiAwareness
                         != Windows.Win32.UI.HiDpi.DPI_AWARENESS.DPI_AWARENESS_UNAWARE
@@ -261,7 +269,7 @@ namespace AppContainer
                         uint windowDpi = PInvoke.GetDpiForWindow(appWindow);
                         float dpiScale = windowDpi / 96.0f;
 
-                        
+
                         appX = (int)(appX / dpiScale);
                         appY = (int)(appY / dpiScale);
                         appWidth = (int)(appWidth / dpiScale);
@@ -283,16 +291,16 @@ namespace AppContainer
             }
         }
 
-        
-        
-        
+
+
+
         private static void HandleFocusChange(FocusState state)
         {
             if (state == FocusState.HasFocus)
             {
                 Log("Host window gained focus");
 
-                
+
                 if (magnificationEnabled && zoomFactor > 1.0f && magnifierHostWindow != HWND.Null)
                 {
                     PInvoke.ShowWindow(
@@ -302,7 +310,7 @@ namespace AppContainer
                     PInvoke.MagShowSystemCursor(false);
                 }
 
-                
+
                 if (appWindow != HWND.Null)
                 {
                     PInvoke.EnableWindow(appWindow, true);
@@ -314,7 +322,7 @@ namespace AppContainer
             {
                 Log("Host window lost focus");
 
-                
+
                 if (magnificationEnabled && magnifierHostWindow != HWND.Null)
                 {
                     PInvoke.ShowWindow(
@@ -512,10 +520,20 @@ namespace AppContainer
                     255,
                     Windows.Win32.UI.WindowsAndMessaging.LAYERED_WINDOW_ATTRIBUTES_FLAGS.LWA_ALPHA
                 );
+                if (magnifierHostWindow != HWND.Null && appProcess != null)
+                {
+                    PInvoke.SetWindowLong(
+                        magnifierHostWindow,
+                        Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWLP_USERDATA,
+                       appProcess.Id
+                    );
+                }
+
                 PInvoke.ShowWindow(
                     magnifierHostWindow,
                     Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_HIDE
                 );
+
                 Log("Magnifier host window created");
             }
             catch (Exception ex)
@@ -633,7 +651,7 @@ namespace AppContainer
                 UpdateMagnifierSource();
                 ResizeMagnifierHostWindow();
 
-                
+
                 if (PInvoke.GetForegroundWindow() == appWindow)
                 {
                     PInvoke.ShowWindow(
@@ -662,7 +680,7 @@ namespace AppContainer
             int magWidth = (int)(appWidth * zoomFactor);
             int magHeight = (int)(appHeight * zoomFactor);
 
-            
+
             magWidth = Math.Min(magWidth, hostWidth);
             magHeight = Math.Min(magHeight, hostHeight);
 
@@ -828,7 +846,7 @@ namespace AppContainer
                 }
             }
 
-            
+
             fixed (char* pClassName = WindowClassName)
             fixed (char* pWindowName = WindowName)
             {
@@ -859,10 +877,10 @@ namespace AppContainer
 
         private static async Task RemoveWindowStylesDelayed()
         {
-            
+
             await Task.Delay(500);
 
-            
+
             var currentStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)
                 PInvoke.GetWindowLong(
                     appWindow,
@@ -875,7 +893,7 @@ namespace AppContainer
                     Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE
                 );
 
-            
+
             currentStyle &= ~(
                 Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CAPTION
                 | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME
@@ -886,10 +904,10 @@ namespace AppContainer
                 | Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_BORDER
             );
 
-            
+
             currentStyle |= Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_CHILD;
 
-            
+
             currentExtendedStyle &= ~(
                 Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_DLGMODALFRAME
                 | Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_COMPOSITED
@@ -901,7 +919,7 @@ namespace AppContainer
                 | Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_APPWINDOW
             );
 
-            
+
             PInvoke.SetWindowLong(
                 appWindow,
                 Windows.Win32.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX.GWL_STYLE,
@@ -914,7 +932,7 @@ namespace AppContainer
                 (int)currentExtendedStyle
             );
 
-            
+
             PInvoke.SetWindowPos(
                 appWindow,
                 HWND.Null,
@@ -944,7 +962,7 @@ namespace AppContainer
                 throw new Exception($"Failed to set parent window");
             }
 
-            
+
             var currentStyle = (Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE)
                 PInvoke.GetWindowLong(
                     appWindow,
@@ -995,27 +1013,27 @@ namespace AppContainer
                 );
             }
 
-            
-            
-            
-            
+
+
+
+
             bool needsRepositioning = false;
 
             if (appDpiAwareness != Windows.Win32.UI.HiDpi.DPI_AWARENESS.DPI_AWARENESS_UNAWARE)
             {
-                
+
                 needsRepositioning = true;
                 Log($"DPI-aware app - will reposition after embedding");
             }
             else if (!useCustomPosition)
             {
-                
+
                 needsRepositioning = true;
                 Log($"Fullscreen/centered mode - will reposition after embedding");
             }
             else if (appWidth <= 0 || appHeight <= 0)
             {
-                
+
                 needsRepositioning = true;
                 Log(
                     $"Special size values (width={appWidth}, height={appHeight}) - will reposition after embedding"
@@ -1023,7 +1041,7 @@ namespace AppContainer
             }
             else
             {
-                
+
                 Log(
                     $"DPI-unaware with custom position - skipping repositioning to preserve BorderlessGaming coordinates"
                 );
@@ -1039,7 +1057,7 @@ namespace AppContainer
                 : $"App window embedded: {appWidth}x{appHeight} centered";
             Log(positionLog);
 
-            
+
             Task.Run(RemoveWindowStylesDelayed);
         }
 
@@ -1047,20 +1065,20 @@ namespace AppContainer
         {
             if (appWidth == 0 && appHeight == 0)
             {
-                
-                
+
+
                 if (PInvoke.GetWindowRect(appWindow, out var currentAppRect))
                 {
                     int currentWidth = currentAppRect.right - currentAppRect.left;
                     int currentHeight = currentAppRect.bottom - currentAppRect.top;
 
-                    
+
                     if (PInvoke.GetClientRect(hostWindow, out var hostRect))
                     {
                         int hostWidth = hostRect.right - hostRect.left;
                         int hostHeight = hostRect.bottom - hostRect.top;
 
-                        
+
                         if (currentWidth < hostWidth || currentHeight < hostHeight)
                         {
                             appWidth = currentWidth;
@@ -1071,7 +1089,7 @@ namespace AppContainer
                         }
                         else
                         {
-                            
+
                             appWidth = hostWidth;
                             appHeight = hostHeight;
                             Log($"Using host's full size: {appWidth}x{appHeight}");
@@ -1081,7 +1099,7 @@ namespace AppContainer
             }
             else if (appWidth == -1 && appHeight == -1)
             {
-                
+
                 if (PInvoke.GetWindowRect(appWindow, out var currentRect))
                 {
                     appWidth = currentRect.right - currentRect.left;
@@ -1091,7 +1109,7 @@ namespace AppContainer
             }
             else if (appWidth > 0 && appHeight > 0)
             {
-                
+
                 Log($"Using explicit size: {appWidth}x{appHeight}");
             }
         }
@@ -1130,8 +1148,8 @@ namespace AppContainer
         {
             if (useCustomPosition)
             {
-                
-                
+
+
                 int relativeX = appX - currentMonitor.X;
                 int relativeY = appY - currentMonitor.Y;
 
@@ -1142,7 +1160,7 @@ namespace AppContainer
             }
             else
             {
-                
+
                 if (!PInvoke.GetClientRect(hostWindow, out var clientRect))
                     return;
 
@@ -1283,18 +1301,18 @@ namespace AppContainer
                 case PInvoke.WM_MBUTTONDOWN:
                     if (hWnd == hostWindow)
                     {
-                        
+
                         if (PInvoke.GetClientRect(hostWindow, out var clientRect))
                         {
                             int x = (short)(lParam.Value & 0xFFFF);
                             int y = (short)((lParam.Value >> 16) & 0xFFFF);
 
-                            
+
                             int appLeft,
                                 appTop;
                             if (useCustomPosition)
                             {
-                                
+
                                 appLeft = appX - currentMonitor.X;
                                 appTop = appY - currentMonitor.Y;
                             }
@@ -1313,7 +1331,7 @@ namespace AppContainer
                                 || y > appTop + appHeight
                             )
                             {
-                                
+
                                 if (appWindow != HWND.Null)
                                 {
                                     PInvoke.SetForegroundWindow(appWindow);
