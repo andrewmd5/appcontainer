@@ -25,9 +25,7 @@
     <PublishAot>true</PublishAot>
     <StaticExecutable>true</StaticExecutable>
     <OptimizationPreference>Size</OptimizationPreference>
-    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
     <IlcFoldIdenticalMethodBodies>false</IlcFoldIdenticalMethodBodies>
-    <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
     <IlcGenerateCompleteTypeMetadata>false</IlcGenerateCompleteTypeMetadata>
     <InvariantGlobalization>true</InvariantGlobalization>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
