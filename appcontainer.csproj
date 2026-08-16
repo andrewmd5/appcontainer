@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <RootNamespace>AppContainer</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWindowsForms>false</UseWindowsForms>

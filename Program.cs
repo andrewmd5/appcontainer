@@ -29,7 +29,7 @@ namespace AppContainer
         private static int appX = -1;
         private static int appY = -1;
         private static bool useCustomPosition = false;
-        private static Monitor currentMonitor;
+        private static Monitor currentMonitor = null!;
         private static readonly string logFilePath = "AppContainer.log";
 
         private static Windows.Win32.UI.HiDpi.DPI_AWARENESS appDpiAwareness;
@@ -152,7 +152,7 @@ namespace AppContainer
                 }
 
 
-                appProcess.EnableRaisingEvents = true;
+                appProcess!.EnableRaisingEvents = true;
                 appProcess.Exited += (sender, e) =>
                 {
                     Log("App process exited");
